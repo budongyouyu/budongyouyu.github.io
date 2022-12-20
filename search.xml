@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<search> 
+  
+  
+    
+    <entry>
+      <title>uvm callback的使用方法</title>
+      <link href="/2022/12/20/uvm-callback/"/>
+      <url>/2022/12/20/uvm-callback/</url>
+      
+        <content type="html"><![CDATA[<h3 id="UVM的回调机制"><a href="#UVM的回调机制" class="headerlink" title="UVM的回调机制"></a>UVM的回调机制</h3><p>callback机制其实就是OOP来实现一种程序开发者向程序使用者提供访问内部模块的接口，可以在不渗透进代码内部，不用大规模修改组件的情况下加入使用者需要的特殊功能，以适应实际需要改变验证平台行为。</p><p>systemverilog实际上已经提供过类似的callback函数：pre_randomize，post_randomize等。</p><p>以在driver中提供callback函数接口为例，在发送transaction之前或之后需要对transaction进行处理，于是建立preSend()和postSend()任务，而不同的测试用例希望preSend或postSend进行不同的处理，所以这两个任务不能是Driver类的方法，这样毫无重用性可言，每搭建一个测试用例就需要新的Driver。<br>解决办法是建立一个新的专门服务callback机制的类，将preSend()和postSend()放在该类中，之后在Driver中实例化该类，通过层次化引用的方法调用preSend和postSend，这样就将两个任务和Driver分离开，不同的测试用例只需要重新定义不同的callback类，不需重新定义Driver。<br>这样还有一个问题，每一个测试用例需要不同的preSend()和postSend()也就是不同的callback类，如果将这些类都放在Driver中实例化的话，也丧失了可重复性，而且Driver也不知道运行测试用例时需要调用哪个callback类的任务。<br>解决思想时将callback类放在对应的测试用例中实例化，然后让Driver调用所有实例化了的对象的preSend()和postSend()任务，这样callback类只会在需要时被实例化，之后Driver只会使用实例化了的callback。方法是先定义一个基类，里面定义两个空的虚拟方法preSend()和postSend()，再创建一个以这个基类为元素的数组（该数组需要时全局的），之后所有的callback类都是这个基类的扩展。在测试用例中，每实例化一个callback类，就将该对象的句柄放入数组中（是一个子类赋给父类的过程），之后在Driver中，会遍历该数组的所有元素（每个元素其实都是一个句柄而已），通过层次化引用方式调用每个元素的preSend()和postSend()方法。</p><h3 id="在验证平台中加入回调"><a href="#在验证平台中加入回调" class="headerlink" title="在验证平台中加入回调"></a>在验证平台中加入回调</h3><ol><li><p>定义callback基类</p><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">class driver_cb extends uvm_callback</span><br><span class="line">endclass</span><br></pre></td></tr></table></figure><p>然后再基类里定义所需要的callback方法，注意方法必须是虚拟的，因为将要在子类中重载。</p><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">class driver_cb extends uvm_callback</span><br><span class="line"></span><br><span class="line"><span class="keyword">function</span> new(string name=<span class="string">&quot;driver_cb&quot;</span>)</span><br><span class="line">    super.new(name)</span><br><span class="line">endfunction</span><br><span class="line"></span><br><span class="line">virtual task pre_send(); endtask</span><br><span class="line">virtual task post_send(); endtask</span><br><span class="line">endclass</span><br></pre></td></tr></table></figure><p>这里实际上用不用uvm_component_utils注册好像都无所谓。</p></li><li><p>在driver中注册基类句柄，注意是注册基类的句柄，这就是我们为什么在前面声明成virtual的，因为我们的callback派生类可能不止一个，但是我们不可能在driver注册很多个，这会加大工作量同时使用者必须要进入driver去register，这就违背了使用callback的初衷了。所以我们只注册基类，通过基类指针去访问派生类的对象。</p></li></ol><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">class driver extends uvm_driver</span><br><span class="line">    ...</span><br><span class="line">    `uvm_register_cb(driver,driver_cb)</span><br><span class="line">    ...</span><br><span class="line"></span><br><span class="line">    task virtual task main_phase(uvm_phase phase);</span><br><span class="line">        `uvm_do_callbacks(driver,driver_err_cb,pre_send())</span><br><span class="line">    endtask</span><br><span class="line"></span><br><span class="line">endclass</span><br></pre></td></tr></table></figure><p>到这里程序开发者的工作基本完成了。下面是程序使用者如何在外部使用。</p><ol start="3"><li>对于一个vip，程序使用者并不是很想去分析每一个组件是怎么样的，他们只想写测试用例，因此我们在testcase的层次展示外部如何使用callback。</li></ol><p>首先程序的使用者先根据程序开发者预留的程序接口派生callback基类，重载基类的函数。</p><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">class driver_err_cb extends driver_cb;</span><br><span class="line"></span><br><span class="line"><span class="keyword">function</span> new(string name=<span class="string">&quot;driver_cb&quot;</span>)</span><br><span class="line">    super.new(name)</span><br><span class="line">endfunction</span><br><span class="line"></span><br><span class="line">virtual task pre_send();</span><br><span class="line">    `uvm_info(<span class="string">&quot;666&quot;</span>);</span><br><span class="line">endtask</span><br><span class="line">endclass</span><br></pre></td></tr></table></figure><p>然后再在testcase中实例化该callback派生类并装载到需要使用的组件中。</p><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">class err_test extends uvm_test</span><br><span class="line">    driver_err_cb drv_cb；</span><br><span class="line">    ...</span><br><span class="line"></span><br><span class="line">    virtual <span class="keyword">function</span> void connect_phase(uvm_phase phase);</span><br><span class="line">        super.connect_phase(phase)</span><br><span class="line">        drv_cb = new();</span><br><span class="line">        `uvm_callbacks<span class="comment">#(driver,driver_err_cb,pre_send())::add(env.agent.driver,drv_cb)</span></span><br><span class="line">    endtask</span><br><span class="line"></span><br><span class="line">endclass</span><br></pre></td></tr></table></figure><p>然后就运行仿真就可以看到666的打印信息啦。</p><h3 id="遗留问题"><a href="#遗留问题" class="headerlink" title="遗留问题"></a>遗留问题</h3><p>关于callback的运行机制还需要去做深层次的研究。下一篇将会剖析uvm如何实现callback机制的。</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> UVM </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> uvm </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>linearsapce</title>
+      <link href="/2022/12/13/linearspace/"/>
+      <url>/2022/12/13/linearspace/</url>
+      
+        <content type="html"><![CDATA[<div class="row">    <embed src="/pdf/linearspace.pdf" width="100%" height="550" type="application/pdf"></div>]]></content>
+      
+      
+      <categories>
+          
+          <category> 博客运行测试文章 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> 数学 </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>git提交github流程</title>
+      <link href="/2022/12/11/cover/"/>
+      <url>/2022/12/11/cover/</url>
+      
+        <content type="html"><![CDATA[<h1 id="git提交本地代码记录"><a href="#git提交本地代码记录" class="headerlink" title="git提交本地代码记录"></a>git提交本地代码记录</h1><p>git和svn的版本管理理念差不多，本质上是一个用于版本管理和代码同步的仓库，以免自己在本地开发代码因为一些错误导致难以修复的bug时，用版本管理方便我们退回到之前的版本。</p><h3 id="git-init"><a href="#git-init" class="headerlink" title="git init"></a>git init</h3><p>首先是要初始化本地仓库，用的是如下命令</p><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">git init</span><br></pre></td></tr></table></figure><p>这一步会在本地你要上传那个目录下执行，比如要上传的文件夹是test，首先通过terminal通过cd到test这个文件夹的路径，然后执行git init，这步完成以后会在本地生成一个.git的隐藏文件夹。</p><h3 id="git-remote"><a href="#git-remote" class="headerlink" title="git remote"></a>git remote</h3><p>然后添加远程仓库的ssh，github仓库的ssh在仓库创建完成之后，找那个绿色的CODE按钮就有。</p><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">git remote add origin git@github.com:xxx/xxxx.git</span><br><span class="line">git remote -v</span><br></pre></td></tr></table></figure><h2 id="拉取远程仓库到本地仓库"><a href="#拉取远程仓库到本地仓库" class="headerlink" title="拉取远程仓库到本地仓库"></a>拉取远程仓库到本地仓库</h2><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">git pull origin main</span><br></pre></td></tr></table></figure><h3 id="git-add"><a href="#git-add" class="headerlink" title="git add"></a>git add</h3><p>本地文件通过add操作加进待传输的队列当中。-A的选项是all的意思，也就是当前目录下所有的文件</p><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ git add -A</span><br></pre></td></tr></table></figure><h3 id="git-commit"><a href="#git-commit" class="headerlink" title="git commit"></a>git commit</h3><p>commit是递交add的文件至版本库中。</p><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ git commit -m <span class="string">&quot;xxx&quot;</span></span><br></pre></td></tr></table></figure><h3 id="git-push"><a href="#git-push" class="headerlink" title="git push"></a>git push</h3><p>递交到版本库中并不意味着文件已经在github上可以看得到了，push操作就是把版本上的文件再推向github。但是在这之前需要统一本地仓库与远程仓库的分支名，不然推送就有问题。分支名一般就main和master。本地的分支名可以通过本地命令查看。</p><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">git branch -a</span><br></pre></td></tr></table></figure><p>如果分支名不一致push的时候报错了或者发现分支名不一致需要更改，可以执行下面的命令。</p><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">git branch -m master main</span><br></pre></td></tr></table></figure><p>这里的master是你要更改的分支名，就是git branch -a如果出来时master，但是远程仓库的分支名是main的话，就这按照上面命令修改即可，但是如果git branch -a如果出来时main，那么上面反过来就好。</p><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ git push -u main\master</span><br></pre></td></tr></table></figure><p>没什么问题的话push就好。</p><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">git push origin main</span><br></pre></td></tr></table></figure><p>origin是关联远程仓库的标签，可以使用git remote -v查看当前本地已经关联的远程仓库，main就是分支名了。</p><h3 id="结语"><a href="#结语" class="headerlink" title="结语"></a>结语</h3><p>关于git还是有很多不懂的东西，只是照着操作了下。</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 博客运行测试文章 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> git </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
+      <title>Hello World</title>
+      <link href="/2022/12/09/hello-world/"/>
+      <url>/2022/12/09/hello-world/</url>
+      
+        <content type="html"><![CDATA[<p>Welcome to <a href="https://hexo.io/">Hexo</a>! This is your very first post. Check <a href="https://hexo.io/docs/">documentation</a> for more info. If you get any problems when using Hexo, you can find the answer in <a href="https://hexo.io/docs/troubleshooting.html">troubleshooting</a> or you can ask me on <a href="https://github.com/hexojs/hexo/issues">GitHub</a>.</p><h2 id="Quick-Start"><a href="#Quick-Start" class="headerlink" title="Quick Start"></a>Quick Start</h2><h3 id="Create-a-new-post"><a href="#Create-a-new-post" class="headerlink" title="Create a new post"></a>Create a new post</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ hexo new <span class="string">&quot;My New Post&quot;</span></span><br></pre></td></tr></table></figure><p>More info: <a href="https://hexo.io/docs/writing.html">Writing</a></p><h3 id="Run-server"><a href="#Run-server" class="headerlink" title="Run server"></a>Run server</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ hexo server</span><br></pre></td></tr></table></figure><p>More info: <a href="https://hexo.io/docs/server.html">Server</a></p><h3 id="Generate-static-files"><a href="#Generate-static-files" class="headerlink" title="Generate static files"></a>Generate static files</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ hexo generate</span><br></pre></td></tr></table></figure><p>More info: <a href="https://hexo.io/docs/generating.html">Generating</a></p><h3 id="Deploy-to-remote-sites"><a href="#Deploy-to-remote-sites" class="headerlink" title="Deploy to remote sites"></a>Deploy to remote sites</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ hexo deploy</span><br></pre></td></tr></table></figure><p>More info: <a href="https://hexo.io/docs/one-command-deployment.html">Deployment</a></p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 博客运行测试文章 </category>
+          
+      </categories>
+      
+      
+    </entry>
+    
+    
+  
+  
+</search>
