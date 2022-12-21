@@ -29,31 +29,6 @@
     
     
     <entry>
-      <title>linearsapce</title>
-      <link href="/2022/12/13/linearspace/"/>
-      <url>/2022/12/13/linearspace/</url>
-      
-        <content type="html"><![CDATA[<div class="row">    <embed src="/pdf/linearspace.pdf" width="100%" height="550" type="application/pdf"></div>]]></content>
-      
-      
-      <categories>
-          
-          <category> 博客运行测试文章 </category>
-          
-      </categories>
-      
-      
-        <tags>
-            
-            <tag> 数学 </tag>
-            
-        </tags>
-      
-    </entry>
-    
-    
-    
-    <entry>
       <title>git提交github流程</title>
       <link href="/2022/12/11/cover/"/>
       <url>/2022/12/11/cover/</url>
